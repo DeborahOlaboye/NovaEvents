@@ -954,6 +954,11 @@ impl NovaEventsContract {
                 / 10_000;
             let seller_amount = price - royalty;
 
+            ticket.owner = to.clone();
+            env.storage()
+                .persistent()
+                .set(&DataKey::Ticket(event_id, ticket_id), &ticket);
+
             let token_addr: Address = env
                 .storage()
                 .instance()
@@ -965,12 +970,12 @@ impl NovaEventsContract {
             if royalty > 0 {
                 token_client.transfer(&to, &event.organizer, &royalty);
             }
+        } else {
+            ticket.owner = to;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Ticket(event_id, ticket_id), &ticket);
         }
-
-        ticket.owner = to;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Ticket(event_id, ticket_id), &ticket);
 
         Ok(())
     }
