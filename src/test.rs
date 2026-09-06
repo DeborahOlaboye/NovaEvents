@@ -1219,10 +1219,7 @@ fn test_resell_ticket_zero_royalty_pays_seller_in_full() {
     let resale_price = 20_000_000_i128;
     client.resell_ticket(&buyer, &event_id, &ticket_id, &recipient, &resale_price);
 
-    assert_eq!(
-        token.balance(&buyer),
-        seller_balance_before + resale_price
-    );
+    assert_eq!(token.balance(&buyer), seller_balance_before + resale_price);
     assert_eq!(token.balance(&organizer), organizer_balance_before);
     assert_eq!(
         token.balance(&recipient),
