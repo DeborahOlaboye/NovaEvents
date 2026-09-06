@@ -1152,6 +1152,86 @@ fn test_resell_ticket_zero_or_negative_price_rejected_when_rules_set() {
 }
 
 #[test]
+fn test_resell_ticket_full_royalty_skips_zero_seller_transfer() {
+    // At royalty_bps: 10_000 (100%), seller_amount is exactly 0. The seller
+    // transfer must be skipped rather than attempted with a zero amount.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_addr, token_admin, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    token_admin.mint(&buyer, &50_000_000_i128);
+    token_admin.mint(&recipient, &50_000_000_i128);
+
+    let event_id = create_test_event(&env, &client, &organizer);
+    let ticket_id = client.buy_ticket(&buyer, &event_id, &0);
+
+    client.set_resale_rules(&organizer, &event_id, &20_000_000_i128, &10_000u32);
+
+    let token = soroban_sdk::token::Client::new(&env, &token_addr);
+    let seller_balance_before = token.balance(&buyer);
+    let organizer_balance_before = token.balance(&organizer);
+    let recipient_balance_before = token.balance(&recipient);
+
+    let resale_price = 20_000_000_i128;
+    client.resell_ticket(&buyer, &event_id, &ticket_id, &recipient, &resale_price);
+
+    assert_eq!(token.balance(&buyer), seller_balance_before);
+    assert_eq!(
+        token.balance(&organizer),
+        organizer_balance_before + resale_price
+    );
+    assert_eq!(
+        token.balance(&recipient),
+        recipient_balance_before - resale_price
+    );
+    assert_eq!(client.get_ticket(&event_id, &ticket_id).owner, recipient);
+}
+
+#[test]
+fn test_resell_ticket_zero_royalty_pays_seller_in_full() {
+    // At royalty_bps: 0, the seller receives the full price and the royalty
+    // transfer is skipped since royalty is exactly 0.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_addr, token_admin, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    token_admin.mint(&buyer, &50_000_000_i128);
+    token_admin.mint(&recipient, &50_000_000_i128);
+
+    let event_id = create_test_event(&env, &client, &organizer);
+    let ticket_id = client.buy_ticket(&buyer, &event_id, &0);
+
+    client.set_resale_rules(&organizer, &event_id, &20_000_000_i128, &0u32);
+
+    let token = soroban_sdk::token::Client::new(&env, &token_addr);
+    let seller_balance_before = token.balance(&buyer);
+    let organizer_balance_before = token.balance(&organizer);
+    let recipient_balance_before = token.balance(&recipient);
+
+    let resale_price = 20_000_000_i128;
+    client.resell_ticket(&buyer, &event_id, &ticket_id, &recipient, &resale_price);
+
+    assert_eq!(
+        token.balance(&buyer),
+        seller_balance_before + resale_price
+    );
+    assert_eq!(token.balance(&organizer), organizer_balance_before);
+    assert_eq!(
+        token.balance(&recipient),
+        recipient_balance_before - resale_price
+    );
+    assert_eq!(client.get_ticket(&event_id, &ticket_id).owner, recipient);
+}
+
+#[test]
 fn test_set_resale_rules_rejected_for_non_organizer() {
     let env = Env::default();
     env.mock_all_auths();
