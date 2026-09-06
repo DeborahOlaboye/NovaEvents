@@ -966,7 +966,9 @@ impl NovaEventsContract {
                 .ok_or(Error::NotInitialized)?;
             let token_client = TokenClient::new(&env, &token_addr);
 
-            token_client.transfer(&to, &from, &seller_amount);
+            if seller_amount > 0 {
+                token_client.transfer(&to, &from, &seller_amount);
+            }
             if royalty > 0 {
                 token_client.transfer(&to, &event.organizer, &royalty);
             }
