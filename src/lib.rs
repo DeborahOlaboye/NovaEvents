@@ -16,6 +16,10 @@ const MAX_SPONSORSHIPS: u32 = 100;
 /// get_payouts, which scans the full list.
 const MAX_PAYOUTS: u32 = 100;
 
+/// Maximum number of royalty records per event, bounding the cost of
+/// get_royalties, which scans the full list.
+const MAX_ROYALTIES: u32 = 1_000;
+
 // ─── Error enum ───────────────────────────────────────────────────────────────
 
 /// All structured failure codes returned by the contract.
@@ -87,6 +91,8 @@ pub enum Error {
     InvalidRoyaltyBps = 30,
     /// Resale price is not positive or exceeds the event's configured max resale price.
     ResalePriceExceedsCap = 31,
+    /// Event has reached the maximum number of recorded royalties.
+    TooManyRoyalties = 32,
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -161,6 +167,17 @@ pub struct Payout {
     pub amount: i128,
 }
 
+/// A record of a single resale royalty paid to the organizer.
+/// Recorded each time `resell_ticket` routes a nonzero royalty to the organizer.
+#[contracttype]
+#[derive(Clone)]
+pub struct Royalty {
+    /// The ticket that was resold.
+    pub ticket_id: u32,
+    /// The royalty amount paid to the organizer (in USDC stroops).
+    pub amount: i128,
+}
+
 /// Per-event resale rules for paid ticket transfers.
 /// When set, `resell_ticket` caps the resale price at `max_price` and routes
 /// `royalty_bps` (basis points, 1 bp = 0.01%) of the price to the organizer.
@@ -175,6 +192,11 @@ pub struct ResaleRules {
 /// that every unit collected is still held or accounted for as a disbursement.
 ///
 /// The contract guarantees `total_collected == total_paid_out + balance`.
+/// Resale royalties are paid peer-to-peer (buyer → organizer) and never touch
+/// the event balance, so they are tracked separately in `royalty_total` and
+/// reflected in `total_collected` for a complete audit picture.
+///
+/// Full audit identity: `total_collected == total_paid_out + balance`.
 #[contracttype]
 #[derive(Clone, PartialEq, Debug)]
 pub struct EventSummary {
@@ -182,12 +204,17 @@ pub struct EventSummary {
     pub ticket_revenue: i128,
     /// Sum of every sponsorship contribution.
     pub sponsorship_total: i128,
-    /// `ticket_revenue + sponsorship_total` — everything the event ever took in.
+    /// `ticket_revenue + sponsorship_total` — everything the event ever took in
+    /// through the contract balance.
     pub total_collected: i128,
     /// Sum of every payout disbursed from the event balance.
     pub total_paid_out: i128,
     /// Funds still held by the contract for this event.
     pub balance: i128,
+    /// Sum of every resale royalty paid directly to the organizer.
+    /// These payments flow peer-to-peer and never touch `balance`, but are
+    /// recorded here so the full financial picture of the event is visible.
+    pub royalty_total: i128,
 }
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
@@ -206,6 +233,7 @@ pub enum DataKey {
     OrganizerEvents(Address),
     Paused,
     ResaleRules(u32),
+    Royalties(u32),
 }
 
 fn require_not_paused(env: &Env) -> Result<(), Error> {
@@ -767,10 +795,16 @@ impl NovaEventsContract {
 
     /// Transfer ticket ownership from the current owner to a new address.
     ///
-    /// Rules enforced:
+    /// This is a thin wrapper around `resell_ticket` with a zero price, so all
+    /// validation and ownership-update logic lives in one place. Free transfers
+    /// (no resale rules configured) behave identically to before: no USDC moves,
+    /// only `ticket.owner` is updated.
+    ///
+    /// Rules enforced (delegated to `resell_ticket`):
     /// - `from` must be the current ticket owner and must authorize the call.
     /// - The event must not be `Cancelled` or `Ended`.
     /// - The ticket must not have been redeemed already.
+    /// - `to` must differ from `from`.
     pub fn transfer_ticket(
         env: Env,
         from: Address,
@@ -778,47 +812,7 @@ impl NovaEventsContract {
         ticket_id: u32,
         to: Address,
     ) -> Result<(), Error> {
-        require_not_paused(&env)?;
-        from.require_auth();
-
-        let event: Event = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Event(event_id))
-            .ok_or(Error::EventNotFound)?;
-
-        // Transfers are blocked for Cancelled or Ended events.
-        if event.status == EventStatus::Cancelled || event.status == EventStatus::Ended {
-            return Err(Error::EventNotActive);
-        }
-
-        let mut ticket: Ticket = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Ticket(event_id, ticket_id))
-            .ok_or(Error::TicketNotFound)?;
-
-        // Only the current owner may transfer.
-        if ticket.owner != from {
-            return Err(Error::NotOwner);
-        }
-
-        // Transferring to yourself is a meaningless no-op.
-        if to == from {
-            return Err(Error::InvalidRecipient);
-        }
-
-        // A redeemed ticket cannot change hands.
-        if ticket.redeemed {
-            return Err(Error::AlreadyRedeemed);
-        }
-
-        ticket.owner = to;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Ticket(event_id, ticket_id), &ticket);
-
-        Ok(())
+        Self::resell_ticket(env, from, event_id, ticket_id, to, 0)
     }
 
     /// Organizer sets (or replaces) the resale rules for an event: a maximum
@@ -882,7 +876,7 @@ impl NovaEventsContract {
     /// - If resale rules are set, `price` must be positive and no greater
     ///   than the configured max price. USDC is transferred from `to` to
     ///   `from`, minus a royalty (`royalty_bps` of `price`) which is routed
-    ///   directly to the organizer.
+    ///   directly to the organizer and recorded on-chain via `get_royalties`.
     ///
     /// Rules enforced (shared with `transfer_ticket`):
     /// - `from` must be the current ticket owner and must authorize the call.
@@ -897,6 +891,7 @@ impl NovaEventsContract {
     /// - `NotOwner`, `InvalidRecipient`, `AlreadyRedeemed`,
     /// - `ResalePriceExceedsCap` if resale rules are set and `price` is not
     ///   positive or exceeds the configured max price.
+    /// - `TooManyRoyalties` if the per-event royalty record cap is reached.
     pub fn resell_ticket(
         env: Env,
         from: Address,
@@ -954,10 +949,31 @@ impl NovaEventsContract {
                 / 10_000;
             let seller_amount = price - royalty;
 
+            // Effects: update ownership before external calls.
             ticket.owner = to.clone();
             env.storage()
                 .persistent()
                 .set(&DataKey::Ticket(event_id, ticket_id), &ticket);
+
+            // Record the royalty on-chain so it is queryable and visible in
+            // get_event_summary, even though it never touches event.balance.
+            if royalty > 0 {
+                let mut royalties: Vec<Royalty> = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::Royalties(event_id))
+                    .unwrap_or_else(|| Vec::new(&env));
+                if royalties.len() >= MAX_ROYALTIES {
+                    return Err(Error::TooManyRoyalties);
+                }
+                royalties.push_back(Royalty {
+                    ticket_id,
+                    amount: royalty,
+                });
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::Royalties(event_id), &royalties);
+            }
 
             let token_addr: Address = env
                 .storage()
@@ -966,6 +982,7 @@ impl NovaEventsContract {
                 .ok_or(Error::NotInitialized)?;
             let token_client = TokenClient::new(&env, &token_addr);
 
+            // Interactions: external token transfers after all state is settled.
             if seller_amount > 0 {
                 token_client.transfer(&to, &from, &seller_amount);
             }
@@ -1184,6 +1201,25 @@ impl NovaEventsContract {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
+    /// Returns every resale royalty recorded for `event_id`.
+    ///
+    /// Each entry corresponds to a single `resell_ticket` call that routed a
+    /// nonzero royalty to the organizer.  Because royalties are paid
+    /// peer-to-peer (buyer → organizer) and never touch the event balance,
+    /// this list is the only on-chain record of that income stream.
+    ///
+    /// Who may call:
+    /// - Publicly readable by any caller.
+    ///
+    /// Errors:
+    /// - Never errors; returns an empty `Vec` if the event has no recorded royalties.
+    pub fn get_royalties(env: Env, event_id: u32) -> Vec<Royalty> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Royalties(event_id))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
     /// Returns the total number of events ever created.
     ///
     /// Who may call:
@@ -1282,10 +1318,16 @@ impl NovaEventsContract {
 
     /// Returns a single audit view of an event's money: what came in from
     /// tickets, what came in from sponsors, what went out, and what is left.
+    /// Also includes the total resale royalties paid directly to the organizer.
     ///
     /// Every figure is derived from the same records the itemized queries read,
-    /// so the summary cannot drift from `get_sponsorships` / `get_payouts`.
-    /// The scans are bounded by MAX_TIERS, MAX_SPONSORSHIPS, and MAX_PAYOUTS.
+    /// so the summary cannot drift from `get_sponsorships` / `get_payouts` /
+    /// `get_royalties`. The scans are bounded by MAX_TIERS, MAX_SPONSORSHIPS,
+    /// MAX_PAYOUTS, and MAX_ROYALTIES.
+    ///
+    /// The contract guarantees `total_collected == total_paid_out + balance`.
+    /// `royalty_total` is tracked separately because royalties flow
+    /// peer-to-peer and never touch the event balance.
     pub fn get_event_summary(env: Env, event_id: u32) -> Result<EventSummary, Error> {
         let event: Event = env
             .storage()
@@ -1327,12 +1369,24 @@ impl NovaEventsContract {
             total_paid_out += payouts.get(i).unwrap().amount;
         }
 
+        let royalties: Vec<Royalty> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Royalties(event_id))
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let mut royalty_total: i128 = 0;
+        for i in 0..royalties.len() {
+            royalty_total += royalties.get(i).unwrap().amount;
+        }
+
         Ok(EventSummary {
             ticket_revenue,
             sponsorship_total,
             total_collected: ticket_revenue + sponsorship_total,
             total_paid_out,
             balance: event.balance,
+            royalty_total,
         })
     }
 
