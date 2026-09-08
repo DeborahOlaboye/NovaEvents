@@ -1048,6 +1048,21 @@ fn test_sponsor_share_non_sponsor_returns_zero() {
     assert_eq!(client.get_sponsor_share(&event_id, &non_sponsor), 0);
 }
 
+#[test]
+fn test_get_sponsor_share_nonexistent_event_returns_event_not_found() {
+    // Issue #65: get_sponsor_share must return EventNotFound for an unknown
+    // event_id instead of silently returning 0.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, _, _, client) = setup(&env);
+    let anyone = Address::generate(&env);
+
+    // No event has been created — event_id 999 does not exist.
+    let result = client.try_get_sponsor_share(&999, &anyone);
+    assert_eq!(result, Err(Ok(Error::EventNotFound)));
+}
+
 // ─── transfer_ticket tests ────────────────────────────────────────────────────
 
 #[test]
