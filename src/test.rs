@@ -103,6 +103,73 @@ fn test_multiple_events_get_distinct_ids() {
 }
 
 #[test]
+fn test_create_event_at_organizer_cap_then_one_more_rejected() {
+    // Issue #57: OrganizerEvents has no cap, unlike every other per-event list.
+    // Creating events up to MAX_EVENTS_PER_ORGANIZER must succeed; one more must
+    // fail with TooManyEvents.
+    //
+    // NOTE: MAX_EVENTS_PER_ORGANIZER = 1_000. Running the full loop is slow but
+    // correct; we use a single-tier minimal event to keep each iteration cheap.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, _, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+
+    let single_tier = soroban_sdk::vec![
+        &env,
+        TierInput {
+            name: String::from_str(&env, "GA"),
+            price: 1_i128,
+            supply_cap: 1,
+        },
+    ];
+
+    for _ in 0..MAX_EVENTS_PER_ORGANIZER {
+        client.create_event(
+            &organizer,
+            &String::from_str(&env, "E"),
+            &String::from_str(&env, "d"),
+            &String::from_str(&env, "v"),
+            &1_750_000_000_u64,
+            &1_i128,
+            &single_tier,
+        );
+    }
+
+    assert_eq!(
+        client.get_events_by_organizer(&organizer).len(),
+        MAX_EVENTS_PER_ORGANIZER
+    );
+
+    // One more must be rejected.
+    let result = client.try_create_event(
+        &organizer,
+        &String::from_str(&env, "One too many"),
+        &String::from_str(&env, "d"),
+        &String::from_str(&env, "v"),
+        &1_750_000_000_u64,
+        &1_i128,
+        &single_tier,
+    );
+    assert_eq!(result, Err(Ok(Error::TooManyEvents)));
+
+    // A different organizer is unaffected by the first one's cap.
+    let other = Address::generate(&env);
+    let other_id = client.create_event(
+        &other,
+        &String::from_str(&env, "Fresh organizer"),
+        &String::from_str(&env, "d"),
+        &String::from_str(&env, "v"),
+        &1_750_000_000_u64,
+        &1_i128,
+        &single_tier,
+    );
+    assert_eq!(client.get_events_by_organizer(&other).len(), 1);
+    let _ = other_id;
+}
+
+#[test]
 fn test_buy_ticket() {
     let env = Env::default();
     env.mock_all_auths();
