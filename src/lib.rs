@@ -599,7 +599,14 @@ impl NovaEventsContract {
         }
 
         let tier: TicketTier = tiers.get(tier_index).unwrap();
-        if tier.tickets_sold + quantity > tier.supply_cap {
+        // Use checked_add to guard against u32 overflow when combining two
+        // caller-controlled values. An overflow here is treated the same as
+        // "sold out" because the tier cannot meaningfully hold that many tickets.
+        let new_sold = tier
+            .tickets_sold
+            .checked_add(quantity)
+            .ok_or(Error::TierSoldOut)?;
+        if new_sold > tier.supply_cap {
             return Err(Error::TierSoldOut);
         }
 
@@ -622,7 +629,8 @@ impl NovaEventsContract {
                     name: t.name,
                     price: t.price,
                     supply_cap: t.supply_cap,
-                    tickets_sold: t.tickets_sold + quantity,
+                    // new_sold was already validated above via checked_add.
+                    tickets_sold: new_sold,
                 });
             } else {
                 updated.push_back(t);

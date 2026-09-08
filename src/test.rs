@@ -2415,3 +2415,59 @@ fn test_get_event_summary_royalty_total_accumulates_across_multiple_resales() {
     // ticket_b was never resold; its royalty entry belongs to ticket_a only.
     let _ = ticket_b; // referenced to avoid unused-variable warning
 }
+
+// ─── Issue #64: checked_add in buy_tickets ────────────────────────────────────
+
+#[test]
+fn test_buy_tickets_quantity_overflow_returns_tier_sold_out() {
+    // Issue #64: tier.tickets_sold + quantity was an unchecked u32 addition.
+    // Construct a scenario where tickets_sold is already at u32::MAX - 1 by
+    // using a tier with supply_cap = u32::MAX and selling all-but-one ticket,
+    // then attempt to buy u32::MAX tickets so that the sum wraps.
+    //
+    // In practice a supply_cap of u32::MAX is unreachable through legitimate
+    // usage (supply caps are set by the organizer at event creation), but the
+    // arithmetic must still be safe. The checked_add path returns TierSoldOut,
+    // which is the least surprising error for "you asked for more than fits".
+    //
+    // We exercise the overflow path directly by crafting inputs where
+    // tickets_sold + quantity > u32::MAX: use a single-cap tier so one ticket
+    // sells immediately, then ask for u32::MAX more — the sum overflows.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, token_admin, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+    let buyer = Address::generate(&env);
+
+    // Create an event with a tier that has supply_cap = 2 so we can first sell
+    // one ticket legitimately and then attempt a quantity that overflows u32.
+    let overflow_tiers = soroban_sdk::vec![
+        &env,
+        TierInput {
+            name: String::from_str(&env, "Overflow"),
+            price: 1_i128,
+            supply_cap: 2,
+        },
+    ];
+    let event_id = client.create_event(
+        &organizer,
+        &String::from_str(&env, "Overflow Event"),
+        &String::from_str(&env, "Testing checked_add"),
+        &String::from_str(&env, "Testland"),
+        &1_750_000_000_u64,
+        &1_i128,
+        &overflow_tiers,
+    );
+
+    // Sell one ticket so tickets_sold = 1.
+    token_admin.mint(&buyer, &1_i128);
+    client.buy_ticket(&buyer, &event_id, &0);
+    assert_eq!(client.get_tiers(&event_id).get(0).unwrap().tickets_sold, 1);
+
+    // Now attempt to buy u32::MAX tickets: 1 + u32::MAX overflows u32.
+    // The checked_add guard must return TierSoldOut instead of panicking.
+    token_admin.mint(&buyer, &(u32::MAX as i128));
+    let result = client.try_buy_tickets(&buyer, &event_id, &0, &u32::MAX);
+    assert_eq!(result, Err(Ok(Error::TierSoldOut)));
+}
