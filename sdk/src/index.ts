@@ -96,6 +96,29 @@ export interface ResaleRules {
   royalty_bps: number;
 }
 
+/**
+ * Aggregated financial view of an event, so an auditor can confirm in one call
+ * that every unit collected is still held or accounted for as a disbursement.
+ *
+ * The contract guarantees `total_collected == total_paid_out + balance`.
+ * Resale royalties flow peer-to-peer (buyer → organizer) and never touch the
+ * event balance, so they are tracked separately in `royalty_total`.
+ */
+export interface EventSummary {
+  /** Sum of every ticket sold, priced at its tier. */
+  ticket_revenue: bigint;
+  /** Sum of every sponsorship contribution. */
+  sponsorship_total: bigint;
+  /** `ticket_revenue + sponsorship_total`. */
+  total_collected: bigint;
+  /** Sum of every payout disbursed from the event balance. */
+  total_paid_out: bigint;
+  /** Funds still held by the contract for this event. */
+  balance: bigint;
+  /** Sum of every resale royalty paid directly to the organizer. */
+  royalty_total: bigint;
+}
+
 // ─── XDR helpers ─────────────────────────────────────────────────────────────
 
 function addressToScVal(address: string): xdr.ScVal {
@@ -178,6 +201,18 @@ function scValToResaleRules(val: xdr.ScVal): ResaleRules {
   return {
     max_price: native["max_price"] as bigint,
     royalty_bps: native["royalty_bps"] as number,
+  };
+}
+
+function scValToEventSummary(val: xdr.ScVal): EventSummary {
+  const native = scValToNative(val) as Record<string, unknown>;
+  return {
+    ticket_revenue: native["ticket_revenue"] as bigint,
+    sponsorship_total: native["sponsorship_total"] as bigint,
+    total_collected: native["total_collected"] as bigint,
+    total_paid_out: native["total_paid_out"] as bigint,
+    balance: native["balance"] as bigint,
+    royalty_total: native["royalty_total"] as bigint,
   };
 }
 
@@ -632,6 +667,20 @@ export class NovaEventsClient {
       return null;
     }
     return scValToResaleRules(result);
+  }
+
+  /**
+   * Returns an aggregated financial summary of an event: ticket revenue,
+   * sponsorship total, total collected, total paid out, current balance, and
+   * total resale royalties paid directly to the organizer.
+   */
+  async get_event_summary(event_id: number): Promise<EventSummary> {
+    const op = this.contract.call(
+      "get_event_summary",
+      nativeToScVal(event_id, { type: "u32" })
+    );
+    const result = await this.query(op);
+    return scValToEventSummary(result);
   }
 
   /**
