@@ -1358,6 +1358,40 @@ fn test_set_resale_rules_validates_inputs() {
     assert_eq!(bad_bps, Err(Ok(Error::InvalidRoyaltyBps)));
 }
 
+#[test]
+fn test_set_resale_rules_rejected_on_ended_event() {
+    // Issue #63: set_resale_rules must be rejected on an Ended event.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, _, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+    let event_id = create_test_event(&env, &client, &organizer);
+
+    client.end_event(&organizer, &event_id);
+    assert_eq!(client.get_event(&event_id).status, EventStatus::Ended);
+
+    let result = client.try_set_resale_rules(&organizer, &event_id, &20_000_000_i128, &1_000u32);
+    assert_eq!(result, Err(Ok(Error::EventNotActive)));
+}
+
+#[test]
+fn test_set_resale_rules_rejected_on_cancelled_event() {
+    // Issue #63: set_resale_rules must be rejected on a Cancelled event.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, _, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+    let event_id = create_test_event(&env, &client, &organizer);
+
+    client.cancel_event(&organizer, &event_id);
+    assert_eq!(client.get_event(&event_id).status, EventStatus::Cancelled);
+
+    let result = client.try_set_resale_rules(&organizer, &event_id, &20_000_000_i128, &1_000u32);
+    assert_eq!(result, Err(Ok(Error::EventNotActive)));
+}
+
 // ─── Payout tests ─────────────────────────────────────────────────────────────
 
 /// Helper: create an event, sell a ticket to fund its balance, then end it.

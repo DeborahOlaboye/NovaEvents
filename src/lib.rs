@@ -863,6 +863,9 @@ impl NovaEventsContract {
         if event.organizer != organizer {
             return Err(Error::Unauthorized);
         }
+        if event.status != EventStatus::Active {
+            return Err(Error::EventNotActive);
+        }
         if max_price <= 0 {
             return Err(Error::InvalidMaxResalePrice);
         }
