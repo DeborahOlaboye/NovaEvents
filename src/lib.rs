@@ -99,6 +99,8 @@ pub enum Error {
     TooManyRoyalties = 32,
     /// Organizer has reached the maximum number of events they may create.
     TooManyEvents = 33,
+    /// Tier name must not be empty.
+    EmptyTierName = 34,
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -390,6 +392,9 @@ impl NovaEventsContract {
             if t.supply_cap == 0 {
                 return Err(Error::InvalidTierSupply);
             }
+            if t.name.is_empty() {
+                return Err(Error::EmptyTierName);
+            }
         }
 
         // Enforce per-organizer event cap before touching any storage.
@@ -412,6 +417,17 @@ impl NovaEventsContract {
             .set(&DataKey::EventCounter, &(event_id + 1));
 
         let organizer_clone = organizer.clone();
+
+        // Enforce per-organizer event cap before touching any storage.
+        let organizer_events_preview: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OrganizerEvents(organizer_clone.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        if organizer_events_preview.len() >= MAX_EVENTS_PER_ORGANIZER {
+            return Err(Error::TooManyEvents);
+        }
+
         env.storage().persistent().set(
             &DataKey::Event(event_id),
             &Event {

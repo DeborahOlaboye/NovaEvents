@@ -941,6 +941,37 @@ fn test_zero_supply_cap_tier_rejected() {
 }
 
 #[test]
+fn test_empty_tier_name_rejected() {
+    // Issue #62: a tier with an empty name must be rejected with EmptyTierName.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, _, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+
+    let bad_tiers = vec![
+        &env,
+        TierInput {
+            name: String::from_str(&env, ""),
+            price: 10_000_000_i128,
+            supply_cap: 50,
+        },
+    ];
+
+    let result = client.try_create_event(
+        &organizer,
+        &String::from_str(&env, "Event"),
+        &String::from_str(&env, "desc"),
+        &String::from_str(&env, "venue"),
+        &1_750_000_000_u64,
+        &100_000_000_i128,
+        &bad_tiers,
+    );
+
+    assert_eq!(result, Err(Ok(Error::EmptyTierName)));
+}
+
+#[test]
 fn test_sponsor_share_single_sponsor_is_100_percent() {
     let env = Env::default();
     env.mock_all_auths();
