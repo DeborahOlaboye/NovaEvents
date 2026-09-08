@@ -20,6 +20,10 @@ const MAX_PAYOUTS: u32 = 100;
 /// get_royalties, which scans the full list.
 const MAX_ROYALTIES: u32 = 1_000;
 
+/// Maximum number of events a single organizer may create, bounding the cost of
+/// get_events_by_organizer, which scans the full list.
+const MAX_EVENTS_PER_ORGANIZER: u32 = 1_000;
+
 // ─── Error enum ───────────────────────────────────────────────────────────────
 
 /// All structured failure codes returned by the contract.
@@ -93,6 +97,8 @@ pub enum Error {
     ResalePriceExceedsCap = 31,
     /// Event has reached the maximum number of recorded royalties.
     TooManyRoyalties = 32,
+    /// Organizer has reached the maximum number of events they may create.
+    TooManyEvents = 33,
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -384,6 +390,16 @@ impl NovaEventsContract {
             if t.supply_cap == 0 {
                 return Err(Error::InvalidTierSupply);
             }
+        }
+
+        // Enforce per-organizer event cap before touching any storage.
+        let organizer_events_preview: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OrganizerEvents(organizer.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        if organizer_events_preview.len() >= MAX_EVENTS_PER_ORGANIZER {
+            return Err(Error::TooManyEvents);
         }
 
         let event_id: u32 = env
