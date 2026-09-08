@@ -121,6 +121,7 @@ new NovaEventsClient(opts?: {
 | `get_token()` | `string` | Configured USDC token contract address |
 | `get_balance(event_id)` | `bigint` | Contract's USDC balance for an event (stroops) |
 | `get_sponsor_share(event_id, sponsor)` | `bigint` | Sponsor's share in basis points (0–10 000) |
+| `get_event_summary(event_id)` | `EventSummary` | Aggregated financial summary of an event |
 
 ---
 
@@ -133,6 +134,8 @@ interface NovaEvent   { organizer: string; name: string; description: string; ve
                         date_unix: bigint; funding_goal: bigint; balance: bigint; status: EventStatus }
 interface Ticket      { event_id: number; tier_index: number; owner: string; redeemed: boolean }
 interface Sponsorship { sponsor: string; amount: bigint }
+interface EventSummary { ticket_revenue: bigint; sponsorship_total: bigint; total_collected: bigint;
+                        total_paid_out: bigint; balance: bigint; royalty_total: bigint }
 type EventStatus = "Active" | "Ended" | "Cancelled"
 ```
 

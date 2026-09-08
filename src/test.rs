@@ -103,6 +103,73 @@ fn test_multiple_events_get_distinct_ids() {
 }
 
 #[test]
+fn test_create_event_at_organizer_cap_then_one_more_rejected() {
+    // Issue #57: OrganizerEvents has no cap, unlike every other per-event list.
+    // Creating events up to MAX_EVENTS_PER_ORGANIZER must succeed; one more must
+    // fail with TooManyEvents.
+    //
+    // NOTE: MAX_EVENTS_PER_ORGANIZER = 1_000. Running the full loop is slow but
+    // correct; we use a single-tier minimal event to keep each iteration cheap.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, _, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+
+    let single_tier = soroban_sdk::vec![
+        &env,
+        TierInput {
+            name: String::from_str(&env, "GA"),
+            price: 1_i128,
+            supply_cap: 1,
+        },
+    ];
+
+    for _ in 0..MAX_EVENTS_PER_ORGANIZER {
+        client.create_event(
+            &organizer,
+            &String::from_str(&env, "E"),
+            &String::from_str(&env, "d"),
+            &String::from_str(&env, "v"),
+            &1_750_000_000_u64,
+            &1_i128,
+            &single_tier,
+        );
+    }
+
+    assert_eq!(
+        client.get_events_by_organizer(&organizer).len(),
+        MAX_EVENTS_PER_ORGANIZER
+    );
+
+    // One more must be rejected.
+    let result = client.try_create_event(
+        &organizer,
+        &String::from_str(&env, "One too many"),
+        &String::from_str(&env, "d"),
+        &String::from_str(&env, "v"),
+        &1_750_000_000_u64,
+        &1_i128,
+        &single_tier,
+    );
+    assert_eq!(result, Err(Ok(Error::TooManyEvents)));
+
+    // A different organizer is unaffected by the first one's cap.
+    let other = Address::generate(&env);
+    let other_id = client.create_event(
+        &other,
+        &String::from_str(&env, "Fresh organizer"),
+        &String::from_str(&env, "d"),
+        &String::from_str(&env, "v"),
+        &1_750_000_000_u64,
+        &1_i128,
+        &single_tier,
+    );
+    assert_eq!(client.get_events_by_organizer(&other).len(), 1);
+    let _ = other_id;
+}
+
+#[test]
 fn test_buy_ticket() {
     let env = Env::default();
     env.mock_all_auths();
@@ -700,6 +767,38 @@ fn test_update_event_details_locked_once_tickets_sold() {
 }
 
 #[test]
+fn test_update_event_details_rejected_on_ended_event_with_zero_tickets() {
+    // Issue #58: update_event_details must reject non-Active events even when
+    // no tickets have been sold. An Ended event has zero ticket sales but
+    // editing its details is semantically meaningless — the event is over.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, _, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+    let event_id = create_test_event(&env, &client, &organizer);
+
+    // End the event without selling any tickets (zero sales, so EventDetailsLocked
+    // would never fire — this is exactly the gap the issue describes).
+    client.end_event(&organizer, &event_id);
+    assert_eq!(client.get_tiers(&event_id).get(0).unwrap().tickets_sold, 0);
+
+    let result = client.try_update_event_details(
+        &organizer,
+        &event_id,
+        &String::from_str(&env, "Post-mortem rename"),
+        &String::from_str(&env, "desc"),
+        &String::from_str(&env, "venue"),
+        &1_800_000_000_u64,
+    );
+    assert_eq!(result, Err(Ok(Error::EventNotActive)));
+
+    // Event details must be unchanged.
+    let event = client.get_event(&event_id);
+    assert_eq!(event.name, String::from_str(&env, "Stellar Summit"));
+}
+
+#[test]
 fn test_create_event_with_empty_name_rejected() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1288,6 +1387,40 @@ fn test_set_resale_rules_validates_inputs() {
 
     let bad_bps = client.try_set_resale_rules(&organizer, &event_id, &20_000_000_i128, &10_001u32);
     assert_eq!(bad_bps, Err(Ok(Error::InvalidRoyaltyBps)));
+}
+
+#[test]
+fn test_set_resale_rules_rejected_on_ended_event() {
+    // Issue #63: set_resale_rules must be rejected on an Ended event.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, _, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+    let event_id = create_test_event(&env, &client, &organizer);
+
+    client.end_event(&organizer, &event_id);
+    assert_eq!(client.get_event(&event_id).status, EventStatus::Ended);
+
+    let result = client.try_set_resale_rules(&organizer, &event_id, &20_000_000_i128, &1_000u32);
+    assert_eq!(result, Err(Ok(Error::EventNotActive)));
+}
+
+#[test]
+fn test_set_resale_rules_rejected_on_cancelled_event() {
+    // Issue #63: set_resale_rules must be rejected on a Cancelled event.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, _, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+    let event_id = create_test_event(&env, &client, &organizer);
+
+    client.cancel_event(&organizer, &event_id);
+    assert_eq!(client.get_event(&event_id).status, EventStatus::Cancelled);
+
+    let result = client.try_set_resale_rules(&organizer, &event_id, &20_000_000_i128, &1_000u32);
+    assert_eq!(result, Err(Ok(Error::EventNotActive)));
 }
 
 // ─── Payout tests ─────────────────────────────────────────────────────────────

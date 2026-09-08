@@ -397,6 +397,16 @@ impl NovaEventsContract {
             }
         }
 
+        // Enforce per-organizer event cap before touching any storage.
+        let organizer_events_preview: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OrganizerEvents(organizer.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        if organizer_events_preview.len() >= MAX_EVENTS_PER_ORGANIZER {
+            return Err(Error::TooManyEvents);
+        }
+
         let event_id: u32 = env
             .storage()
             .instance()
@@ -503,6 +513,9 @@ impl NovaEventsContract {
             .ok_or(Error::EventNotFound)?;
         if event.organizer != organizer {
             return Err(Error::Unauthorized);
+        }
+        if event.status != EventStatus::Active {
+            return Err(Error::EventNotActive);
         }
 
         let tiers: Vec<TicketTier> = env
@@ -865,6 +878,9 @@ impl NovaEventsContract {
             .ok_or(Error::EventNotFound)?;
         if event.organizer != organizer {
             return Err(Error::Unauthorized);
+        }
+        if event.status != EventStatus::Active {
+            return Err(Error::EventNotActive);
         }
         if max_price <= 0 {
             return Err(Error::InvalidMaxResalePrice);
