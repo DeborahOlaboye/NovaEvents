@@ -700,6 +700,38 @@ fn test_update_event_details_locked_once_tickets_sold() {
 }
 
 #[test]
+fn test_update_event_details_rejected_on_ended_event_with_zero_tickets() {
+    // Issue #58: update_event_details must reject non-Active events even when
+    // no tickets have been sold. An Ended event has zero ticket sales but
+    // editing its details is semantically meaningless — the event is over.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, _, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+    let event_id = create_test_event(&env, &client, &organizer);
+
+    // End the event without selling any tickets (zero sales, so EventDetailsLocked
+    // would never fire — this is exactly the gap the issue describes).
+    client.end_event(&organizer, &event_id);
+    assert_eq!(client.get_tiers(&event_id).get(0).unwrap().tickets_sold, 0);
+
+    let result = client.try_update_event_details(
+        &organizer,
+        &event_id,
+        &String::from_str(&env, "Post-mortem rename"),
+        &String::from_str(&env, "desc"),
+        &String::from_str(&env, "venue"),
+        &1_800_000_000_u64,
+    );
+    assert_eq!(result, Err(Ok(Error::EventNotActive)));
+
+    // Event details must be unchanged.
+    let event = client.get_event(&event_id);
+    assert_eq!(event.name, String::from_str(&env, "Stellar Summit"));
+}
+
+#[test]
 fn test_create_event_with_empty_name_rejected() {
     let env = Env::default();
     env.mock_all_auths();

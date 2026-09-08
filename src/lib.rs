@@ -482,6 +482,9 @@ impl NovaEventsContract {
         if event.organizer != organizer {
             return Err(Error::Unauthorized);
         }
+        if event.status != EventStatus::Active {
+            return Err(Error::EventNotActive);
+        }
 
         let tiers: Vec<TicketTier> = env
             .storage()
