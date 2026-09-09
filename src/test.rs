@@ -470,6 +470,22 @@ fn test_non_organizer_cannot_redeem_ticket() {
 }
 
 #[test]
+fn test_redeem_nonexistent_ticket_id_returns_ticket_not_found() {
+    // Issue #66: redeem_ticket with a ticket_id that was never issued for the
+    // event must return TicketNotFound.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, _, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+    let event_id = create_test_event(&env, &client, &organizer);
+
+    // No tickets have been purchased — ticket_id 99 does not exist.
+    let result = client.try_redeem_ticket(&organizer, &event_id, &99);
+    assert_eq!(result, Err(Ok(Error::TicketNotFound)));
+}
+
+#[test]
 fn test_get_token_returns_configured_address() {
     let env = Env::default();
     env.mock_all_auths();
