@@ -2502,3 +2502,18 @@ fn test_buy_tickets_quantity_overflow_returns_tier_sold_out() {
     let result = client.try_buy_tickets(&buyer, &event_id, &0, &u32::MAX);
     assert_eq!(result, Err(Ok(Error::TierSoldOut)));
 }
+
+#[test]
+fn test_redeem_ticket_nonexistent_event_returns_event_not_found() {
+    // Issue #67: redeem_ticket must return EventNotFound for a nonexistent event_id,
+    // similar to how test_sponsor_nonexistent_event_fails works (issue #60).
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, _, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+
+    // No event created — event_id 99 does not exist.
+    let result = client.try_redeem_ticket(&organizer, &99, &0);
+    assert_eq!(result, Err(Ok(Error::EventNotFound)));
+}
