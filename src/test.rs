@@ -2375,7 +2375,13 @@ fn test_resell_ticket_at_max_royalties_cap_then_one_more_rejected() {
         let next_owner = Address::generate(&env);
         token_admin.mint(&next_owner, &(50_000_000_000_i128));
 
-        client.resell_ticket(&current_owner, &event_id, &ticket_id, &next_owner, &20_000_000_i128);
+        client.resell_ticket(
+            &current_owner,
+            &event_id,
+            &ticket_id,
+            &next_owner,
+            &20_000_000_i128,
+        );
         current_owner = next_owner;
     }
 
@@ -2385,7 +2391,13 @@ fn test_resell_ticket_at_max_royalties_cap_then_one_more_rejected() {
     let final_buyer = Address::generate(&env);
     token_admin.mint(&final_buyer, &(50_000_000_000_i128));
 
-    let result = client.try_resell_ticket(&current_owner, &event_id, &ticket_id, &final_buyer, &20_000_000_i128);
+    let result = client.try_resell_ticket(
+        &current_owner,
+        &event_id,
+        &ticket_id,
+        &final_buyer,
+        &20_000_000_i128,
+    );
     assert_eq!(result, Err(Ok(Error::TooManyRoyalties)));
 }
 
